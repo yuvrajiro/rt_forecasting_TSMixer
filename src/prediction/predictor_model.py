@@ -187,6 +187,8 @@ class Forecaster:
         n_extra_channels = len(self.data_schema.future_covariates)
         if data_schema.time_col_dtype == "DATE": # year, month, day
             n_extra_channels += 3
+        else:
+            n_extra_channels += 1
 
 
         self.model = TSMixer(
