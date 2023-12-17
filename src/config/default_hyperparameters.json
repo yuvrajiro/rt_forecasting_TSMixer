@@ -8,6 +8,7 @@
   "n_epochs": 500,
   "batch_size": 16,
   "force_reset": true,
+  "norm_type": "layer",
   "save_checkpoints": true,
   "optimizer_kwargs": {"lr": 1e-2},
   "use_exogenous": true,
