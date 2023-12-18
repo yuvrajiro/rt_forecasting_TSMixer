@@ -541,9 +541,9 @@ class _TSMixer(PLMixedCovariatesModule):
         # initialize last batch size to check if new mask needs to be generated
         self.batch_size_last = -1
         self.relative_index = None
-        print(f"n input channels {n_input_channels}, n extra channels {n_extra_channels}")
-        self.past_normalizer = RevIN(3)
-        self.future_normalizer = RevIN(2)
+
+        self.past_normalizer = RevIN(n_extra_channels)
+        self.future_normalizer = RevIN(n_extra_channels-n_input_channels)
 
         # can be edited to use static variable
         static_channels = 1
