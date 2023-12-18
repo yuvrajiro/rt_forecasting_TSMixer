@@ -537,13 +537,14 @@ class _TSMixer(PLMixedCovariatesModule):
         self.num_block = num_block
         self.dropout = dropout
         self.add_relative_index = add_relative_index
+        self.n_input_channels = n_input_channels
 
         # initialize last batch size to check if new mask needs to be generated
         self.batch_size_last = -1
         self.relative_index = None
 
-        self.past_normalizer = RevIN(n_extra_channels)
-        self.future_normalizer = RevIN(n_extra_channels-n_input_channels)
+        self.past_normalizer = RevIN(num_features=self.n_targets, subtract_last=True)
+
 
         # can be edited to use static variable
         static_channels = 1
@@ -766,8 +767,11 @@ class _TSMixer(PLMixedCovariatesModule):
         dim_samples, dim_time, dim_variable = 0, 1, 2
         device = x_in[0].device
 
-        x_cont_past = self.past_normalizer(x_cont_past, mode='norm')
-        x_cont_future = self.future_normalizer(x_cont_future, mode='norm')
+        x_cont_past_target = x_cont_past[:, :, : self.n_targets]
+        x_cont_past_covariates = x_cont_past[:, :, self.n_targets:]
+        x_cont_past_target = self.past_normalizer(x_cont_past_target, mode='norm')
+        x_cont_past = torch.cat([x_cont_past_target, x_cont_past_covariates], dim=-1)
+
         batch_size = x_cont_past.shape[dim_samples]
         encoder_length = self.input_chunk_length
         decoder_length = self.output_chunk_length
@@ -818,7 +822,9 @@ class _TSMixer(PLMixedCovariatesModule):
         for mixing_layer in self.conditional_mixer:
             x = mixing_layer(x, x_static=x_static)
 
+
         x = self.fc_out(x)
+
         x = self.past_normalizer(x, mode='denorm')
         return x.unsqueeze(-1)
 
