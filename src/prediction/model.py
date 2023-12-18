@@ -24,6 +24,70 @@ logger = get_logger(__name__)
 MixedCovariatesTrainTensorType = Tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]
+from torch import Tensor
+
+
+class RevIN(nn.Module):
+    def __init__(self, num_features: int, eps=1e-5, affine=True, subtract_last=False):
+        """
+        :param num_features: the number of features or channels
+        :param eps: a value added for numerical stability
+        :param affine: if True, RevIN has learnable affine parameters
+        """
+        super(RevIN, self).__init__()
+        self.num_features = num_features
+        self.eps = eps
+        self.affine = affine
+        self.subtract_last = subtract_last
+        self.mean = None
+        self.stdev = None
+        self.last = None
+        if self.affine:
+            self._init_params()
+
+    def forward(self, x, mode:str):
+        if mode == 'norm':
+            self._get_statistics(x)
+            x = self._normalize(x)
+        elif mode == 'denorm':
+            x = self._denormalize(x)
+        else: raise NotImplementedError
+        return x
+
+    def _init_params(self):
+        # initialize RevIN params: (C,)
+        self.affine_weight = nn.Parameter(torch.ones(self.num_features))
+        self.affine_bias = nn.Parameter(torch.zeros(self.num_features))
+
+    def _get_statistics(self, x):
+        dim2reduce = tuple(range(1, x.ndim-1))
+        if self.subtract_last:
+            self.last = x[:,-1,:].unsqueeze(1)
+        else:
+            self.mean = torch.mean(x, dim=dim2reduce, keepdim=True).detach()
+        self.stdev = torch.sqrt(torch.var(x, dim=dim2reduce, keepdim=True, unbiased=False) + self.eps).detach()
+
+    def _normalize(self, x):
+        if self.subtract_last:
+            x = x - self.last
+        else:
+            x = x - self.mean
+        x = x / self.stdev
+        if self.affine:
+            x = x * self.affine_weight
+            x = x + self.affine_bias
+        return x
+
+    def _denormalize(self, x):
+        if self.affine:
+            x = x - self.affine_bias
+            x = x / (self.affine_weight + self.eps*self.eps)
+        x = x * self.stdev
+        if self.subtract_last:
+            x = x + self.last
+        else:
+            x = x + self.mean
+        return x
 
 
 class TimeBatchNorm2d(nn.BatchNorm1d):
@@ -477,6 +541,9 @@ class _TSMixer(PLMixedCovariatesModule):
         # initialize last batch size to check if new mask needs to be generated
         self.batch_size_last = -1
         self.relative_index = None
+        print(f"n input channels {n_input_channels}, n extra channels {n_extra_channels}")
+        self.past_normalizer = RevIN(3)
+        self.future_normalizer = RevIN(2)
 
         # can be edited to use static variable
         static_channels = 1
@@ -492,7 +559,7 @@ class _TSMixer(PLMixedCovariatesModule):
             "batch",
             "layer",
         }, f"Invalid norm_type: {norm_type}, must be one of batch, layer."
-        norm_type = TimeBatchNorm2d if norm_type == "batch" else nn.LayerNorm
+        norm_type = nn.BatchNorm1d if norm_type == "batch" else nn.LayerNorm
         sequence_length = self.input_chunk_length
         prediction_length = self.output_chunk_length
         output_channels = self.n_targets
@@ -699,6 +766,8 @@ class _TSMixer(PLMixedCovariatesModule):
         dim_samples, dim_time, dim_variable = 0, 1, 2
         device = x_in[0].device
 
+        x_cont_past = self.past_normalizer(x_cont_past, mode='norm')
+        x_cont_future = self.future_normalizer(x_cont_future, mode='norm')
         batch_size = x_cont_past.shape[dim_samples]
         encoder_length = self.input_chunk_length
         decoder_length = self.output_chunk_length
@@ -735,49 +804,7 @@ class _TSMixer(PLMixedCovariatesModule):
                 dim=dim_variable,
             )
 
-        input_vectors_past = {
-            name: x_cont_past[..., idx].unsqueeze(-1)
-            for idx, name in enumerate(self.encoder_variables)
-        }
-        input_vectors_future = {
-            name: x_cont_future[..., idx].unsqueeze(-1)
-            for idx, name in enumerate(self.decoder_variables)
-        }
 
-        # Embedding and variable selection
-        if self.static_variables:
-            # categorical static covariate embeddings
-            if self.categorical_static_variables:
-                static_embedding = self.input_embeddings(
-                    torch.cat(
-                        [
-                            x_static[:, :, idx]
-                            for idx, name in enumerate(self.static_variables)
-                            if name in self.categorical_static_variables
-                        ],
-                        dim=1,
-                    ).int()
-                )
-            else:
-                static_embedding = {}
-            # add numerical static covariates
-            static_embedding.update(
-                {
-                    name: x_static[:, :, idx]
-                    for idx, name in enumerate(self.static_variables)
-                    if name in self.numeric_static_variables
-                }
-            )
-            static_embedding, static_covariate_var = self.static_covariates_vsn(
-                static_embedding
-            )
-        else:
-            static_embedding = torch.zeros(
-                (x_cont_past.shape[0], self.hidden_size),
-                dtype=x_cont_past.dtype,
-                device=device,
-            )
-            static_covariate_var = None
 
         # Concatenate historical time series data with additional historical data
         x_hist = x_cont_past
@@ -790,8 +817,10 @@ class _TSMixer(PLMixedCovariatesModule):
         x = torch.cat([x_hist, x_future], dim=-1)
         for mixing_layer in self.conditional_mixer:
             x = mixing_layer(x, x_static=x_static)
-        x = self.fc_out(x).unsqueeze(-1)
-        return x
+
+        x = self.fc_out(x)
+        x = self.past_normalizer(x, mode='denorm')
+        return x.unsqueeze(-1)
 
 
 class TSMixer(MixedCovariatesTorchModel):
