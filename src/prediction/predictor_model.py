@@ -21,13 +21,13 @@ MODEL_FILE_NAME = "model.joblib"
 
 
 class Forecaster:
-    """A wrapper class for the TFT Forecaster.
+    """A wrapper class for the TSMixer Forecaster.
 
     This class provides a consistent interface that can be used with other
     Forecaster models.
     """
 
-    model_name = "TFT Forecaster"
+    model_name = "TSmixer Forecaster"
 
     def __init__(
         self,
@@ -37,7 +37,7 @@ class Forecaster:
         history_forecast_ratio: int = None,
         lags_forecast_ratio: int = None,
         hidden_size: Union[int, List[int]] = 16,
-        lstm_layers: int = 1,
+        ff_dim: int = 32,
         num_block: int = 4,
         dropout: float = 0.0,
         hidden_continuous_size: int = 8,
@@ -49,7 +49,7 @@ class Forecaster:
         random_state: int = 0,
         **kwargs,
     ):
-        """Construct a new TFT Forecaster
+        """Construct a new TSMixer Forecaster
 
         Args:
             input_chunk_length (int):
@@ -82,23 +82,13 @@ class Forecaster:
                 output_chunk_length = forecast horizon
 
             hidden_size (Union[int, List[int]]):
-                Hidden state size of the TFT. It is the main hyper-parameter and common across the internal TFT architecture.
+                Hidden state size of the TSMixer. Thee size in which all  the covariates are projected to.
 
-            lstm_layers (int):
-                Number of layers for the Long Short Term Memory (LSTM) Encoder and Decoder (1 is a good default).
+            ff_dim (int):
+                Hidden state size of the feed forward network in the TSMixer.
 
-            num_attention_heads (int):
-                Number of attention heads (4 is a good default)
-
-            full_attention (bool):
-                If False, only attends to previous time steps in the decoder.
-                If True attends to previous, current, and future time steps. Defaults to False.
-
-            feed_forward (str):
-                A feedforward network is a fully-connected layer with an activation.
-                TFT Can be one of the glu variant's FeedForward Network (FFN).
-                The glu variant's FeedForward Network are a series of FFNs designed to work better with Transformer based models.
-                Defaults to "GatedResidualNetwork". [“GLU”, “Bilinear”, “ReGLU”, “GEGLU”, “SwiGLU”, “ReLU”, “GELU”] or the TFT original FeedForward Network [“GatedResidualNetwork”].
+            num_block (int):
+                Number of conditional mixing block (4 is a good default)
 
             dropout (float):
                 The dropout probability to be used in fully connected layers.
@@ -119,7 +109,7 @@ class Forecaster:
 
             add_relative_index (bool):
                 Whether to add positional values to future covariates.
-                Defaults to False. This allows to use the TFTModel without having to pass future_covariates to fit() and train().
+                Defaults to False. This allows to use the TSMixer Model without having to pass future_covariates to fit() and train().
                 It gives a value to the position of each step from input and output chunk relative to the prediction point.
                 The values are normalized with input_chunk_length.
 
@@ -144,7 +134,7 @@ class Forecaster:
         self.input_chunk_length = input_chunk_length
         self.output_chunk_length = output_chunk_length
         self.hidden_size = hidden_size
-        self.lstm_layers = lstm_layers
+        self.ff_dim = ff_dim
         self.num_block = num_block
         self.norm_type = norm_type
         self.dropout = dropout
@@ -197,6 +187,7 @@ class Forecaster:
             n_input_channels=n_input_channels,
             n_extra_channels=n_extra_channels,
             hidden_size=self.hidden_size,
+            ff_dim = self.ff_dim,
             num_block=self.num_block,
             dropout=self.dropout,
             hidden_continuous_size=self.hidden_continuous_size,
@@ -334,7 +325,7 @@ class Forecaster:
         test_dataframe: pd.DataFrame = None,
     ) -> None:
         """Fit the Forecaster to the training data.
-        A separate TFT model is fit to each series that is contained
+        A separate TSmixerr model is fit to each series that is contained
         in the data.
 
         Args:
@@ -418,7 +409,7 @@ class Forecaster:
             Forecaster: A new instance of the loaded Forecaster.
         """
         forecaster = joblib.load(os.path.join(model_dir_path, PREDICTOR_FILE_NAME))
-        model = TFTModel.load(os.path.join(model_dir_path, MODEL_FILE_NAME))
+        model = TSMixer.load(os.path.join(model_dir_path, MODEL_FILE_NAME))
         forecaster.model = model
         return forecaster
 

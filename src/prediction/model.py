@@ -1,5 +1,4 @@
 from __future__ import annotations
-import torch.nn as nn
 import torch.nn.functional as F
 from collections.abc import Callable
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -51,7 +50,8 @@ class RevIN(nn.Module):
             x = self._normalize(x)
         elif mode == 'denorm':
             x = self._denormalize(x)
-        else: raise NotImplementedError
+        else:
+            raise NotImplementedError
         return x
 
     def _init_params(self):
@@ -486,7 +486,8 @@ class _TSMixer(PLMixedCovariatesModule):
             output_dim: Tuple[int, int],
             variables_meta: Dict[str, Dict[str, List[str]]],
             num_static_components: int,
-            hidden_size: Union[int, List[int]],
+            hidden_size: int,
+            ff_dim: int,
             num_block: int,
             hidden_continuous_size: int,
             dropout: float,
@@ -538,6 +539,7 @@ class _TSMixer(PLMixedCovariatesModule):
         self.dropout = dropout
         self.add_relative_index = add_relative_index
         self.n_input_channels = n_input_channels
+        self.ff_dim = ff_dim
 
         # initialize last batch size to check if new mask needs to be generated
         self.batch_size_last = -1
@@ -545,8 +547,6 @@ class _TSMixer(PLMixedCovariatesModule):
 
         self.past_normalizer = RevIN(num_features=self.n_targets, subtract_last=True)
 
-
-        # can be edited to use static variable
         static_channels = 1
 
         activation_fn = kwargs.get("activation_fn", "relu")
@@ -560,7 +560,7 @@ class _TSMixer(PLMixedCovariatesModule):
             "batch",
             "layer",
         }, f"Invalid norm_type: {norm_type}, must be one of batch, layer."
-        norm_type = nn.BatchNorm1d if norm_type == "batch" else nn.LayerNorm
+        norm_type = TimeBatchNorm2d if norm_type == "batch" else nn.LayerNorm
         sequence_length = self.input_chunk_length
         prediction_length = self.output_chunk_length
         output_channels = self.n_targets
@@ -569,7 +569,6 @@ class _TSMixer(PLMixedCovariatesModule):
         dropout_rate = self.dropout
         normalize_before = False
         num_blocks = self.num_block
-        ff_dim = self.hidden_size
         self.fc_hist = nn.Linear(sequence_length, prediction_length)
         self.fc_out = nn.Linear(self.hidden_size, output_channels)
 
@@ -578,7 +577,7 @@ class _TSMixer(PLMixedCovariatesModule):
             input_channels=input_channels + extra_channels,
             output_channels=self.hidden_size,
             static_channels=static_channels,
-            ff_dim=ff_dim,
+            ff_dim=self.ff_dim,
             activation_fn=activation_fn,
             dropout_rate=dropout_rate,
             normalize_before=normalize_before,
@@ -589,7 +588,7 @@ class _TSMixer(PLMixedCovariatesModule):
             input_channels=extra_channels,
             output_channels=self.hidden_size,
             static_channels=static_channels,
-            ff_dim=ff_dim,
+            ff_dim=self.ff_dim,
             activation_fn=activation_fn,
             dropout_rate=dropout_rate,
             normalize_before=normalize_before,
@@ -600,7 +599,7 @@ class _TSMixer(PLMixedCovariatesModule):
             num_blocks,
             self.hidden_size,
             prediction_length,
-            ff_dim=ff_dim,
+            ff_dim=self.ff_dim,
             static_channels=static_channels,
             activation_fn=activation_fn,
             dropout_rate=dropout_rate,
@@ -695,62 +694,14 @@ class _TSMixer(PLMixedCovariatesModule):
         index[encoder_length:] = index[encoder_length:] / prediction_index
         return index.reshape(1, len(index), 1).repeat(batch_size, 1, 1)
 
-    @staticmethod
-    def get_attention_mask_full(
-            time_steps: int, batch_size: int, dtype: torch.dtype, device: torch.device
-    ) -> torch.Tensor:
-        """
-        Returns causal mask to apply for self-attention layer.
-        """
-        eye = torch.eye(time_steps, dtype=dtype, device=device)
-        mask = torch.cumsum(eye.unsqueeze(0).repeat(batch_size, 1, 1), dim=1)
-        return mask < 1
 
-    @staticmethod
-    def get_attention_mask_future(
-            encoder_length: int,
-            decoder_length: int,
-            batch_size: int,
-            device: str,
-            full_attention: bool,
-    ) -> torch.Tensor:
-        """
-        Returns causal mask to apply for self-attention layer that acts on future input only.
-        The model will attend to all `False` values.
-        """
-        if full_attention:
-            # attend to entire past and future input
-            decoder_mask = torch.zeros(
-                (decoder_length, decoder_length), dtype=torch.bool, device=device
-            )
-        else:
-            # attend only to past steps relative to forecasting step in the future
-            # indices to which is attended
-            attend_step = torch.arange(decoder_length, device=device)
-            # indices for which is predicted
-            predict_step = torch.arange(0, decoder_length, device=device)[:, None]
-            # do not attend to steps to self or after prediction
-            decoder_mask = attend_step >= predict_step
-        # attend to all past input
-        encoder_mask = torch.zeros(
-            batch_size, encoder_length, dtype=torch.bool, device=device
-        )
-        # combine masks along attended time - first encoder and then decoder
 
-        mask = torch.cat(
-            (
-                encoder_mask.unsqueeze(1).expand(-1, decoder_length, -1),
-                decoder_mask.unsqueeze(0).expand(batch_size, -1, -1),
-            ),
-            dim=2,
-        )
-        return mask
 
     @io_processor
     def forward(
             self, x_in: Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]
     ) -> torch.Tensor:
-        """TFT model forward pass.
+        """TSMixer model forward pass.
 
         Parameters
         ----------
@@ -775,9 +726,6 @@ class _TSMixer(PLMixedCovariatesModule):
         batch_size = x_cont_past.shape[dim_samples]
         encoder_length = self.input_chunk_length
         decoder_length = self.output_chunk_length
-        time_steps = encoder_length + decoder_length
-
-        # avoid unnecessary regeneration of attention mask
         if batch_size != self.batch_size_last:
             if self.add_relative_index:
                 self.relative_index = self.get_relative_index(
@@ -807,10 +755,6 @@ class _TSMixer(PLMixedCovariatesModule):
                 ],
                 dim=dim_variable,
             )
-
-
-
-        # Concatenate historical time series data with additional historical data
         x_hist = x_cont_past
         x_static = torch.zeros([x_hist.size(0), 1], dtype=torch.float64)
         x_hist_temp = feature_to_time(x_hist)
@@ -821,8 +765,6 @@ class _TSMixer(PLMixedCovariatesModule):
         x = torch.cat([x_hist, x_future], dim=-1)
         for mixing_layer in self.conditional_mixer:
             x = mixing_layer(x, x_static=x_static)
-
-
         x = self.fc_out(x)
 
         x = self.past_normalizer(x, mode='denorm')
@@ -836,7 +778,8 @@ class TSMixer(MixedCovariatesTorchModel):
             output_chunk_length: int,
             n_input_channels: int,
             n_extra_channels: int,
-            hidden_size: Union[int, List[int]] = 16,
+            hidden_size: int = 16,
+            ff_dim: int = 32,
             num_block: int = 10,
             dropout: float = 0.1,
             hidden_continuous_size: int = 8,
@@ -887,6 +830,7 @@ class TSMixer(MixedCovariatesTorchModel):
         self.pl_module_params = self._extract_pl_module_params(**model_kwargs)
         self.hidden_size = hidden_size
         self.num_block = num_block
+        self.ff_dim = ff_dim
         self.dropout = dropout
         self.hidden_continuous_size = hidden_continuous_size
         self.n_input_channels = n_input_channels
@@ -1077,6 +1021,7 @@ class TSMixer(MixedCovariatesTorchModel):
             variables_meta=variables_meta,
             num_static_components=n_static_components,
             hidden_size=self.hidden_size,
+            ff_dim= self.ff_dim,
             dropout=self.dropout,
             num_block=self.num_block,
             hidden_continuous_size=self.hidden_continuous_size,
