@@ -194,14 +194,10 @@ class Forecaster:
 
         n_input_channels =len(self.data_schema.past_covariates) + 1
         n_extra_channels = len(self.data_schema.future_covariates)
-        if data_schema.time_col_dtype == "DATE": # year, month, day
+        if data_schema.time_col_dtype in ["DATE", "DATETIME"]: # year, month, day
             n_extra_channels += 3
         else:
             n_extra_channels += 1
-
-
-
-
 
         self.model = TSMixer(
             input_chunk_length=self.input_chunk_length,
