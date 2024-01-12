@@ -726,7 +726,7 @@ class _TSMixer(PLMixedCovariatesModule):
         x_cont_past, x_cont_future, x_static = x_in
         dim_samples, dim_time, dim_variable = 0, 1, 2
         device = x_in[0].device
-        x_static = x_static.view(x_cont_past.size(0), self.num_static_components, -1).squeeze(2)
+
 
 
 
@@ -768,7 +768,7 @@ class _TSMixer(PLMixedCovariatesModule):
                 dim=dim_variable,
             )
         x_hist = x_cont_past
-        x_static = x_static if self.static_channel_provided else torch.zeros([x_hist.size(0), 1], dtype=torch.float64)
+        x_static = x_static.view(x_cont_past.size(0), self.num_static_components, -1).squeeze(2) if self.static_channel_provided else torch.zeros([x_hist.size(0), 1], dtype=torch.float64)
         x_hist_temp = feature_to_time(x_hist)
         x_hist_temp = self.fc_hist(x_hist_temp)
         x_hist = time_to_feature(x_hist_temp)
