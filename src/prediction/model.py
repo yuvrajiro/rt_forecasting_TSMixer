@@ -280,9 +280,15 @@ class ConditionalFeatureMixing(nn.Module):
         """
         v = self.fr_static(x_static)  # Transform static features to match output channels.
 
-        v = v.unsqueeze(1).repeat(
-            1, x.shape[1], 1
-        )  # Repeat static features across time steps.
+        # v = v.unsqueeze(1).repeat(
+        #     1, x.shape[1], 1
+        # )  # Repeat static features across time steps.
+        required_shape = (1, x.shape[1], 1)
+
+        if v.shape != required_shape:
+            v = v.unsqueeze(1).repeat(
+                1, x.shape[1], 1
+            )  # Repeat static features across time steps.
 
         return (
             self.fm(
@@ -547,7 +553,9 @@ class _TSMixer(PLMixedCovariatesModule):
 
         self.past_normalizer = RevIN(num_features=self.n_targets, subtract_last=True)
 
-        static_channels = 1
+        static_channels = num_static_components if num_static_components > 0 else 1
+        self.static_channel_provided = num_static_components > 0
+        print(f"static_channels: {static_channels}")
 
         activation_fn = kwargs.get("activation_fn", "relu")
         if hasattr(F, activation_fn):
@@ -570,6 +578,7 @@ class _TSMixer(PLMixedCovariatesModule):
         normalize_before = False
         num_blocks = self.num_block
         self.fc_hist = nn.Linear(sequence_length, prediction_length)
+        output_channels = self.n_targets
         self.fc_out = nn.Linear(self.hidden_size, output_channels)
 
         self.feature_mixing_hist = ConditionalFeatureMixing(
@@ -717,6 +726,9 @@ class _TSMixer(PLMixedCovariatesModule):
         x_cont_past, x_cont_future, x_static = x_in
         dim_samples, dim_time, dim_variable = 0, 1, 2
         device = x_in[0].device
+        x_static = x_static.view(x_cont_past.size(0), self.num_static_components, -1).squeeze(2)
+
+
 
         x_cont_past_target = x_cont_past[:, :, : self.n_targets]
         x_cont_past_covariates = x_cont_past[:, :, self.n_targets:]
@@ -756,7 +768,7 @@ class _TSMixer(PLMixedCovariatesModule):
                 dim=dim_variable,
             )
         x_hist = x_cont_past
-        x_static = torch.zeros([x_hist.size(0), 1], dtype=torch.float64)
+        x_static = x_static if self.static_channel_provided else torch.zeros([x_hist.size(0), 1], dtype=torch.float64)
         x_hist_temp = feature_to_time(x_hist)
         x_hist_temp = self.fc_hist(x_hist_temp)
         x_hist = time_to_feature(x_hist_temp)
@@ -839,6 +851,12 @@ class TSMixer(MixedCovariatesTorchModel):
         self.output_dim: Optional[Tuple[int, int]] = None
         self.norm_type = norm_type
         self._considers_static_covariates = use_static_covariates
+        categorical_embedding_sizes = None
+        self.categorical_embedding_sizes = (
+            categorical_embedding_sizes
+            if categorical_embedding_sizes is not None
+            else {}
+        )
 
     def _create_model(self, train_sample: MixedCovariatesTrainTensorType) -> nn.Module:
         """
@@ -860,6 +878,7 @@ class TSMixer(MixedCovariatesTorchModel):
 
         `variable_meta` is used in TFT to access specific variables
         """
+
         (
             past_target,
             past_covariate,
@@ -1007,10 +1026,11 @@ class TSMixer(MixedCovariatesTorchModel):
         variables_meta["model_config"]["static_input_categorical"] = list(
             dict.fromkeys(static_input_categorical)
         )
-
+        print(f"static covariates: {static_covariates}")
         n_static_components = (
-            len(static_covariates) if static_covariates is not None else 0
+            len(static_covariates[0]) if static_covariates is not None else 0
         )
+        print(f"n_static_components: {n_static_components}")
 
         self.categorical_embedding_sizes = categorical_embedding_sizes
 
