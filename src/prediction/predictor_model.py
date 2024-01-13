@@ -47,7 +47,7 @@ class Forecaster:
         use_exogenous: bool = True,
         use_past_covariates: bool = True,
         use_future_covariates: bool = True,
-        norm_type : str = "batch",
+        norm_type: str = "batch",
         random_state: int = 0,
         **kwargs,
     ):
@@ -150,7 +150,6 @@ class Forecaster:
         self._is_trained = False
         self.history_length = None
 
-
         self.use_past_covariates = (
                 use_past_covariates and len(data_schema.past_covariates) > 0
         )
@@ -192,9 +191,9 @@ class Forecaster:
         else:
             print("GPU training not available.")
 
-        n_input_channels =len(self.data_schema.past_covariates) + 1
+        n_input_channels = len(self.data_schema.past_covariates) + 1
         n_extra_channels = len(self.data_schema.future_covariates)
-        if data_schema.time_col_dtype in ["DATE", "DATETIME"]: # year, month, day
+        if data_schema.time_col_dtype in ["DATE", "DATETIME"]:   # year, month, day
             n_extra_channels += 3
         else:
             n_extra_channels += 1
@@ -205,7 +204,7 @@ class Forecaster:
             n_input_channels=n_input_channels,
             n_extra_channels=n_extra_channels,
             hidden_size=self.hidden_size,
-            ff_dim = self.ff_dim,
+            ff_dim=self.ff_dim,
             num_block=self.num_block,
             dropout=self.dropout,
             hidden_continuous_size=self.hidden_continuous_size,
@@ -249,8 +248,6 @@ class Forecaster:
             history[month_col_name] = month_col
             future_covariates_names += [year_col_name, month_col_name]
 
-            year_col = date_col.dt.year
-            month_col = date_col.dt.month
 
         groups_by_ids = history.groupby(data_schema.id_col)
         all_ids = list(groups_by_ids.groups.keys())

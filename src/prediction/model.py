@@ -5,7 +5,7 @@ from typing import Dict, List, Optional, Sequence, Tuple, Union
 import numpy as np
 import pandas as pd
 import torch
-from torch import nn
+from torch import Tensor, nn
 from darts import TimeSeries
 from darts.logging import get_logger, raise_if, raise_if_not
 from darts.models.forecasting.pl_forecasting_module import (
@@ -23,7 +23,6 @@ logger = get_logger(__name__)
 MixedCovariatesTrainTensorType = Tuple[
     torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor
 ]
-from torch import Tensor
 
 
 class RevIN(nn.Module):
@@ -62,7 +61,7 @@ class RevIN(nn.Module):
     def _get_statistics(self, x):
         dim2reduce = tuple(range(1, x.ndim-1))
         if self.subtract_last:
-            self.last = x[:,-1,:].unsqueeze(1)
+            self.last = x[:, -1, :].unsqueeze(1)
         else:
             self.mean = torch.mean(x, dim=dim2reduce, keepdim=True).detach()
         self.stdev = torch.sqrt(torch.var(x, dim=dim2reduce, keepdim=True, unbiased=False) + self.eps).detach()
